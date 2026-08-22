@@ -1,0 +1,342 @@
+---
+name: android-guidelines
+description: Guidelines and instructions for Android development, including SDK design patterns (entry point, environment, exceptions, logging) and Jetpack Compose resource management (strings, colors, typography, themes, dimensions, icons).
+---
+
+# Android Guidelines
+
+This skill documents the standard architecture for creating robust, testable, and highly decoupled Android SDK modules, using the generic entry point structure, environments, exceptions, logging systems, and Jetpack Compose resource management.
+
+## 1. Generic Entry Point Design Pattern
+
+To keep the SDK clean and encapsulate the construction of internal classes (managers, collectors, preferences, etc.), use the **Public Interface + Internal Implementation** pattern with a single entry point class.
+
+### Public SDK Interface (`NetworkSDK`)
+
+- The main SDK class should have an `internal constructor` so the host application cannot instantiate it directly.
+- Provide a `Companion object` with a thread-safe singleton pattern (`getInstance()`) to retrieve the initialized instance.
+- Expose all public APIs by delegating them to an internal implementation wrapper class.
+- Use a static nested `Builder` class to configure and initialize the SDK.
+
+```kotlin
+
+
+class NetworkSDK internal constructor(internal val impl: NetworkSdkImpl) {
+
+    @Throws(SDKException::class)
+    fun activate() = impl.activate()
+
+    fun release() = impl.release()
+
+    companion object {
+        @Volatile
+        private var _instance: NetworkSDK? = null
+
+        fun getInstance(): NetworkSDK =
+            _instance ?: throw IllegalStateException("SDK is not initialized. Call Builder.build() first.")
+
+        fun getInstanceOrNull(): NetworkSDK? = _instance
+
+        internal fun clearInstance() {
+            _instance = null
+        }
+    }
+
+    class Builder(context: Context) {
+        private val appContext: Context = context.applicationContext
+        private var config = SdkConfig()
+
+        fun setDeviceId(deviceId: String) = apply { config = config.copy(deviceId = deviceId) }
+        fun setApiKey(apiKey: String?) = apply { config = config.copy(apiKey = apiKey) }
+
+        @Throws(SDKException::class)
+        fun build(): NetworkSDK {
+            _instance?.let { return it }
+            return synchronized(NetworkSDK::class.java) {
+                _instance ?: buildInternal().also { _instance = it }
+            }
+        }
+
+        private fun buildInternal(): NetworkSDK {
+            val deviceId = DeviceIdValidator.validate(config.deviceId)
+            val apiKey = ApiKeyValidator.validate(config.apiKey)
+
+            val impl = NetworkSdkImpl(
+                context = appContext,
+                config = config.copy(deviceId = deviceId, apiKey = apiKey)
+            )
+            return NetworkSDK(impl)
+        }
+    }
+}
+```
+
+### Internal Implementation (`NetworkSdkImpl`)
+
+- The implementation class is marked `internal class` to keep it out of the public auto-import and API package scope of the host application.
+- It instantiates and wires together helper modules, managers, collectors, and logging classes.
+- Maintains the lifecycle status of the SDK (e.g. `isActivated` flag).
+
+---
+
+## 2. App Environment Design Pattern
+
+Use a centralized `AppEnv` configuration class containing standard endpoint URLs, debug switches, and environment modes (e.g. UAT, Staging, Production). This shields internal modules from checking build types or hardcoding settings.
+
+```kotlin
+
+import androidx.annotation.Keep
+
+object AppEnv {
+    private var current: SdkProductFlavours = SdkProductFlavours.UAT
+    
+    val BASE_URL: String
+        get() = current.baseUrl
+
+    val LOGGING_ENABLED: Boolean
+        get() = current.loggingEnabled
+}
+
+enum class SdkProductFlavours(
+    val baseUrl: String,
+    val loggingEnabled: Boolean
+) {
+    UAT(
+        baseUrl = "http://129.154.245.136:5050",
+        loggingEnabled = true
+    )
+}
+```
+
+---
+
+## 3. SDK Exception Framework
+
+Define standard error codes and wrap all expected SDK runtime and configuration failures into a single `SDKException` class to allow host apps to gracefully handle error paths.
+
+```kotlin
+import androidx.annotation.Keep
+
+@Keep
+object SDKErrorCode {
+    const val MISSING_DEVICE_ID = 1001
+    const val INVALID_DEVICE_ID = 1002
+    const val MISSING_API_KEY   = 1003
+    const val INVALID_API_KEY   = 1004
+    const val MISSING_PERMISSIONS = 1005
+    const val DEVICE_REGISTRATION = 1006
+}
+```
+
+```kotlin
+import androidx.annotation.Keep
+
+@Keep
+class SDKException(
+    val errorCode: Int,
+    message: String
+) : Exception(message)
+```
+
+---
+
+## 4. SDK Logging Pattern
+
+Avoid using raw `Log.d` / `Log.e` calls. Wrap platform logging in a central `SDKLog` helper utility.
+- Prefixes every log message with the SDK Name (e.g., `NetworkConfigurator: `).
+- Checks `AppEnv.LOGGING_ENABLED` to prevent logs leaking in release/production builds.
+- Uses inline functions with lambda message arguments (`message: () -> String`) to prevent string formatting and allocation overhead when logging is disabled.
+
+```kotlin
+import android.util.Log
+import androidx.annotation.Keep
+
+@Keep
+internal object SDKLog {
+    private val _isEnabled: Boolean = AppEnv.LOGGING_ENABLED
+    internal const val PREFIX = "NetworkConfigurator: "
+    internal val isEnabled = _isEnabled
+
+    inline fun d(tag: String, message: () -> String) {
+        if (isEnabled) {
+            Log.d(PREFIX + tag, message())
+        }
+    }
+    
+    // ... Additional i, w, e, v methods ...
+}
+```
+
+---
+
+## 5. Jetpack Compose Resource Management Guidelines
+
+With the rise of Jetpack Compose as the go-to UI toolkit for Android development, managing resources like strings, colors, fonts, and dimensions in a consistent, scalable manner is crucial for building maintainable and efficient applications. While Jetpack Compose offers a fresh approach to UI development, best practices for resource management still follow principles of separation, reusability, and ease of localization.
+
+### Managing Strings for Localization
+Store all static strings in `res/values/strings.xml` for easier localization and to avoid hardcoded strings.
+
+```xml
+<!-- strings.xml -->
+<resources>
+    <string name="app_name">My Compose App</string>
+    <string name="welcome_message">Welcome to Jetpack Compose!</string>
+</resources>
+```
+
+Access these strings using the `stringResource()` function in your Compose code:
+
+```kotlin
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.res.stringResource
+
+@Composable
+fun WelcomeMessage() {
+    Text(text = stringResource(id = R.string.welcome_message))
+}
+```
+
+### Defining and Using Colors
+Centralize color definitions for consistency and reusability by defining them in a Kotlin file or referencing XML color resources.
+
+#### Best Practice: Define Colors in a `Color.kt` File
+```kotlin
+import androidx.compose.ui.graphics.Color
+
+val PrimaryColor = Color(0xFF6200EE)
+val PrimaryLightColor = Color(0xFFBB86FC)
+val PrimaryDarkColor = Color(0xFF3700B3)
+val AccentColor = Color(0xFF03DAC5)
+```
+
+Use these colors in composables:
+```kotlin
+Text(text = "Hello", color = PrimaryColor)
+```
+
+#### Alternative: XML-based colors for backwards compatibility
+```xml
+<!-- colors.xml -->
+<resources>
+    <color name="primaryColor">#6200EE</color>
+    <color name="primaryLightColor">#BB86FC</color>
+</resources>
+```
+
+Access with `colorResource()`:
+```kotlin
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.colorResource
+
+val primaryColor = colorResource(id = R.color.primaryColor)
+```
+
+### Typography and Font Management
+Define fonts and text styles in a centralized manner to ensure consistent typography.
+
+#### Best Practice: Define a `Typography.kt` File
+```kotlin
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+
+val Roboto = FontFamily(
+    Font(R.font.roboto_regular),
+    Font(R.font.roboto_bold, FontWeight.Bold)
+)
+
+val AppTypography = Typography(
+    bodyLarge = TextStyle(
+        fontFamily = Roboto,
+        fontWeight = FontWeight.Normal,
+        fontSize = 16.sp
+    ),
+    displayLarge = TextStyle(
+        fontFamily = Roboto,
+        fontWeight = FontWeight.Bold,
+        fontSize = 24.sp
+    )
+)
+```
+
+Apply these styles in composables:
+```kotlin
+Text(text = "Heading", style = AppTypography.displayLarge)
+```
+
+### Using Themes for Colors, Typography, and Shapes
+Centralize colors, typography, and shapes configuration via `MaterialTheme`.
+
+#### Best Practice: Define a Custom Theme
+Create a `Theme.kt` file:
+```kotlin
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.lightColorScheme
+import androidx.compose.runtime.Composable
+
+@Composable
+fun MyAppTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = lightColorScheme(
+            primary = PrimaryColor,
+            secondary = AccentColor
+        ),
+        typography = AppTypography,
+        shapes = Shapes,
+        content = content
+    )
+}
+```
+
+### Managing Dimensions (Padding, Margins, Sizes)
+Define consistent spacing and sizes centrally.
+
+#### Best Practice: Define Dimensions in a `Dimens.kt` File
+```kotlin
+import androidx.compose.ui.unit.dp
+
+val PaddingSmall = 8.dp
+val PaddingMedium = 16.dp
+val PaddingLarge = 24.dp
+```
+
+Apply in UI components:
+```kotlin
+Box(modifier = Modifier.padding(PaddingMedium)) {
+    // Content here
+}
+```
+
+#### Alternative: Using `dimens.xml`
+```xml
+<resources>
+    <dimen name="padding_small">8dp</dimen>
+    <dimen name="padding_medium">16dp</dimen>
+</resources>
+```
+Access using `dimensionResource()`:
+```kotlin
+val padding = dimensionResource(id = R.dimen.padding_small)
+```
+
+### Icon Management in Compose
+Use vector assets or Material Icons.
+
+#### Best Practice: Use Material Icons
+```kotlin
+import androidx.compose.material3.Icon
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Home
+
+Icon(imageVector = Icons.Filled.Home, contentDescription = "Home Icon")
+```
+
+## 6. Kotlin & Jetpack Compose Coding Style
+
+- **No Fully Qualified Names (FQCN):** Never use inline fully qualified package names in code blocks (e.g., avoid `androidx.compose.ui.graphics.Brush...`, `androidx.compose.foundation.layout.Box...`).
+- **Explicit Imports:** Always declare standard `import` statements at the top of the file for all Compose classes, functions, and modifier extensions (e.g., `import androidx.compose.ui.graphics.Brush`).
+- **Clean Call-sites:** Reference classes directly by their simple name (e.g., `Brush.horizontalGradient(...)`).
