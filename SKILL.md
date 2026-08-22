@@ -492,3 +492,147 @@ When generating or modifying code for a feature, always provide **distinct code 
 // feature/login/LoginScreen.kt
 // feature/login/components/LoginButton.kt
 ```
+
+---
+
+## 8. UI Strings vs. Internal Business Logic
+
+### Rule Summary
+
+| Type | Where it belongs | Example |
+|:-----|:----------------|:--------|
+| User-facing display text | `res/values/strings.xml` | Button labels, screen titles, error messages shown in UI |
+| Internal constants & templates | `InternalConstants.kt` | CSV headers, API keys, format strings, config values |
+| Domain-type strings | `enum class` with a `title` property | Transaction types, status codes, category names |
+
+### 8.1 UI Strings — `res/values/strings.xml`
+
+Only user-facing text displayed inside Jetpack Compose widgets should be localized:
+
+```xml
+<!-- res/values/strings.xml -->
+<resources>
+    <string name="label_income">Income</string>
+    <string name="label_expense">Expense</string>
+    <string name="error_invalid_amount">Please enter a valid amount</string>
+</resources>
+```
+
+```kotlin
+// Used inside a composable only
+Text(text = stringResource(R.string.label_income))
+```
+
+### 8.2 Internal Constants — `InternalConstants.kt`
+
+Strings used for business logic, data formatting, or configuration must **never** go in `strings.xml`. Place them in a centralized object as the single source of truth:
+
+```kotlin
+// util/InternalConstants.kt
+object InternalConstants {
+
+    // CSV import/export
+    object Csv {
+        val EXPECTED_HEADERS = listOf("Date", "Amount", "Type", "Category", "Note")
+        const val DATE_FORMAT = "dd/MM/yyyy"
+        const val DELIMITER = ","
+    }
+
+    // API / Network
+    object Api {
+        const val BASE_URL = "https://api.example.com/v1/"
+        const val TIMEOUT_SECONDS = 30L
+    }
+}
+```
+
+### 8.3 Enum Type Safety
+
+Never use raw string comparisons for domain logic. Always represent defined types with an `enum class`:
+
+```kotlin
+// ❌ Wrong — fragile raw string comparison
+if (transaction.type == "Income") { ... }
+
+// ✅ Correct — type-safe enum with a display title
+enum class TransactionType(val title: String) {
+    INCOME("Income"),
+    EXPENSE("Expense"),
+    TRANSFER("Transfer");
+
+    companion object {
+        fun fromTitle(title: String): TransactionType =
+            entries.firstOrNull { it.title.equals(title, ignoreCase = true) }
+                ?: throw IllegalArgumentException("Unknown transaction type: $title")
+    }
+}
+
+// Usage in business logic
+if (transaction.type == TransactionType.INCOME) { ... }
+
+// Safe parsing from raw data (e.g., CSV or API response)
+val type = TransactionType.fromTitle(rawCsvValue)
+```
+
+---
+
+## 9. Compose Single Responsibility Principle (SRP)
+
+### 9.1 One Entity Per File
+
+A Kotlin file should represent exactly **one** single conceptual entity. Never define multiple distinct UI widgets in the same file.
+
+```
+// ❌ Wrong — multiple unrelated composables in one file
+// TransactionScreen.kt
+fun TransactionScreen() { ... }
+fun DetailRow() { ... }       // ← should be its own file
+fun HeaderCard() { ... }      // ← should be its own file
+```
+
+### 9.2 Extract Components into `components/`
+
+If a screen uses distinct sub-widgets, extract each into its own file inside a `components/` sub-package within the feature folder:
+
+```
+feature/
+└── transaction/
+    ├── TransactionUiState.kt
+    ├── TransactionViewModel.kt
+    ├── TransactionScreen.kt       ← orchestrates components
+    └── components/
+        ├── DetailRow.kt           ← single widget, own file
+        ├── HeaderCard.kt          ← single widget, own file
+        └── AmountBadge.kt         ← single widget, own file
+```
+
+Each component file contains exactly one composable (plus its `@Preview`):
+
+```kotlin
+// feature/transaction/components/DetailRow.kt
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.tooling.preview.Preview
+
+@Composable
+fun DetailRow(
+    label: String,
+    value: String
+) {
+    // implementation
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun DetailRowPreview() {
+    DetailRow(label = "Category", value = "Groceries")
+}
+```
+
+### 9.3 When to Extract
+
+Extract a composable into its own file when **any** of the following are true:
+
+- It is used in more than one screen
+- It has its own meaningful visual identity (card, row, badge, chart)
+- Its own `@Preview` would be useful for design review
+- It would make `Screen.kt` exceed ~150 lines of UI code
