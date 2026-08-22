@@ -340,3 +340,155 @@ Icon(imageVector = Icons.Filled.Home, contentDescription = "Home Icon")
 - **No Fully Qualified Names (FQCN):** Never use inline fully qualified package names in code blocks (e.g., avoid `androidx.compose.ui.graphics.Brush...`, `androidx.compose.foundation.layout.Box...`).
 - **Explicit Imports:** Always declare standard `import` statements at the top of the file for all Compose classes, functions, and modifier extensions (e.g., `import androidx.compose.ui.graphics.Brush`).
 - **Clean Call-sites:** Reference classes directly by their simple name (e.g., `Brush.horizontalGradient(...)`).
+
+---
+
+## 7. Android Architecture & Jetpack Compose Feature Guidelines
+
+Always enforce strict file and architectural separation for any Jetpack Compose feature tasks. Do NOT bundle UI State, ViewModel, and Composable screens into a single file.
+
+### 7.1 File Organization & Package Structure
+
+Every feature must reside in its own package under `feature/<feature_name>/` and split across separate files:
+
+| File | Purpose |
+|:-----|:--------|
+| `<Feature>UiState.kt` | Immutable `data class` or `sealed interface` representing the UI state |
+| `<Feature>ViewModel.kt` | `@HiltViewModel`-annotated class managing state via `StateFlow` and business logic |
+| `<Feature>Screen.kt` | Composable UI split into a stateful entry composable and a stateless previewable composable |
+| `components/` | Sub-package for granular, reusable screen-specific composables |
+
+**Example package layout:**
+```
+feature/
+└── login/
+    ├── LoginUiState.kt
+    ├── LoginViewModel.kt
+    ├── LoginScreen.kt
+    └── components/
+        ├── LoginButton.kt
+        └── LoginTextField.kt
+```
+
+### 7.2 Implementation Rules
+
+#### State Separation (`<Feature>UiState.kt`)
+- Define `UiState` in its own dedicated file.
+- Use `@Immutable` or `@Stable` annotations where appropriate.
+
+```kotlin
+import androidx.compose.runtime.Immutable
+
+@Immutable
+data class LoginUiState(
+    val email: String = "",
+    val password: String = "",
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null
+)
+```
+
+#### ViewModel Lifecycle (`<Feature>ViewModel.kt`)
+- Annotate with `@HiltViewModel` and inject via `@Inject constructor`.
+- Collect flows using `.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), InitialState)`.
+- Expose state as `StateFlow`, never as mutable `LiveData` or raw `MutableStateFlow` to the UI.
+
+```kotlin
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import javax.inject.Inject
+
+@HiltViewModel
+class LoginViewModel @Inject constructor(
+    private val authRepository: AuthRepository
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow(LoginUiState())
+    val uiState: StateFlow<LoginUiState> = _uiState
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = LoginUiState()
+        )
+
+    fun onEmailChanged(email: String) {
+        _uiState.update { it.copy(email = email) }
+    }
+
+    fun onPasswordChanged(password: String) {
+        _uiState.update { it.copy(password = password) }
+    }
+
+    fun onLoginClicked() {
+        // business logic here
+    }
+}
+```
+
+#### Stateless UI (`<Feature>Screen.kt`)
+- Split every screen into two composables:
+  1. **Stateful entry composable** — injects the ViewModel via `hiltViewModel()`, collects state, forwards events.
+  2. **Stateless previewable composable** — accepts direct state and lambda callbacks only. No ViewModel reference.
+- Never pass `ViewModel` instances down to child composables. Hoist all events to lambda parameters.
+
+```kotlin
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+
+// Stateful entry — only this composable knows about the ViewModel
+@Composable
+fun LoginScreen(
+    onLoginSuccess: () -> Unit,
+    viewModel: LoginViewModel = hiltViewModel()
+) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    LoginContent(
+        uiState = uiState,
+        onEmailChanged = viewModel::onEmailChanged,
+        onPasswordChanged = viewModel::onPasswordChanged,
+        onLoginClicked = viewModel::onLoginClicked
+    )
+}
+
+// Stateless & previewable — no ViewModel, no side-effects
+@Composable
+fun LoginContent(
+    uiState: LoginUiState,
+    onEmailChanged: (String) -> Unit,
+    onPasswordChanged: (String) -> Unit,
+    onLoginClicked: () -> Unit
+) {
+    // UI implementation here
+}
+
+@Preview(showBackground = true)
+@Composable
+private fun LoginContentPreview() {
+    LoginContent(
+        uiState = LoginUiState(email = "test@example.com"),
+        onEmailChanged = {},
+        onPasswordChanged = {},
+        onLoginClicked = {}
+    )
+}
+```
+
+### 7.3 Code Output Convention
+
+When generating or modifying code for a feature, always provide **distinct code blocks labeled with the exact file path**, for example:
+
+```
+// feature/login/LoginUiState.kt
+// feature/login/LoginViewModel.kt
+// feature/login/LoginScreen.kt
+// feature/login/components/LoginButton.kt
+```
