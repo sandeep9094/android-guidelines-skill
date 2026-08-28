@@ -1,7 +1,6 @@
 # Android Guidelines Skill for AI Agents
 
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black)](https://www.buymeacoffee.com/sandeep9094)
-
 A global [Antigravity (AGY)](https://developers.google.com/gemini) agent skill that teaches the AI assistant modern Android architecture, Jetpack Compose best practices, and SDK design patterns.
 
 Once installed, this skill is available in **every AGY project** on your machine without any per-project setup.
