@@ -636,3 +636,37 @@ Extract a composable into its own file when **any** of the following are true:
 - It has its own meaningful visual identity (card, row, badge, chart)
 - Its own `@Preview` would be useful for design review
 - It would make `Screen.kt` exceed ~150 lines of UI code
+
+---
+
+## 10. Room Database Migration Guidelines
+
+To prevent user data loss, **never** use `.fallbackToDestructiveMigration()` in production code. Always write explicit, manual migration scripts when changing the database schema.
+
+### 10.1 Schema Evolution Rules
+
+1. **Increment Version**: Increment the `version` integer in the `@Database` annotation whenever modifying entity properties or adding tables.
+2. **Write Explicit Migration**: Define a `Migration(startVersion, endVersion)` object with the exact SQLite DDL statement required.
+3. **Register Migration**: Register the migration object with the Room database builder using `.addMigrations(...)`.
+
+### 10.2 Example Migration Implementation
+
+```kotlin
+// AppDatabase.kt
+
+val MIGRATION_2_3 = object : Migration(2, 3) {
+    override fun migrate(db: SupportSQLiteDatabase) {
+        // Example: Add sortOrder column with a default value of 0
+        db.execSQL("ALTER TABLE categories ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0")
+    }
+}
+
+// Inside getDatabase() builder setup:
+val instance = Room.databaseBuilder(
+    context.applicationContext,
+    AppDatabase::class.java,
+    "expense_tracker_database"
+)
+    .addMigrations(MIGRATION_2_3) // Safe sequential migrations
+    .build()
+```
